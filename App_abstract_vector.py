@@ -28,43 +28,25 @@ def main():
     @st.cache_resource(show_spinner="検索モデルをロード中...")
     def load_data():
         try:
-            # Streamlit Secretsからトークン取得
-            token = st.secrets["GITHUB_TOKEN"]
-            headers = {
-                "Authorization": f"token {token}",
-                "Accept": "application/vnd.github.v3+json"
-            }
+            # ... (中略：GitHubからの取得処理) ...
 
-            # 1. リリース情報の取得
-            release_url = f"https://api.github.com/repos/{OWNER}/{REPO}/releases/tags/{TAG}"
-            res = requests.get(release_url, headers=headers)
-            res.raise_for_status()
-            assets = res.json().get("assets", [])
-            asset_ids = {a["name"]: a["id"] for a in assets}
-
-            def fetch_bin(file_name):
-                aid = asset_ids.get(file_name)
-                if not aid:
-                    raise FileNotFoundError(f"{file_name} がリリースに見つかりません")
-                url = f"https://api.github.com/repos/{OWNER}/{REPO}/releases/assets/{aid}"
-                h = headers.copy()
-                h["Accept"] = "application/octet-stream"
-                r = requests.get(url, headers=h)
-                r.raise_for_status()
-                return io.BytesIO(r.content)
-
-            # 2. メタデータ読み込み
-            df = pd.read_parquet(fetch_bin(META_FILE_NAME))
+            # 1. まずBM25モデルだけを読み込む
+            bm25_bin = fetch_bin(MODEL_FILE_NAME)
+            bm25 = pickle.load(bm25_bin)
+            del bm25_bin # すぐにバイナリを捨てる
             gc.collect()
 
-            # 3. BM25モデル読み込み
-            bm25 = pickle.load(fetch_bin(MODEL_FILE_NAME))
+            # 2. 次にメタデータを読み込む
+            meta_bin = fetch_bin(META_FILE_NAME)
+            df = pd.read_parquet(meta_bin)
+            del meta_bin
             gc.collect()
 
+            # 3. メタデータの軽量化（検索に不要な列をこの時点で捨てる）
+            # もし「概要」が巨大なら、一旦「概要」を落として「題名」等だけで検索し、
+            # 結果表示の時だけ「概要」をマージする方法もあります。
+            
             return bm25, df
-        except Exception as e:
-            st.error(f"ロード失敗: {e}")
-            return None, None
 
     bm25_model, df_meta = load_data()
     if bm25_model is None:
