@@ -1,5 +1,5 @@
 import streamlit as st
-import App_abstract_vector
+#import App_abstract_vector
 import App_keyword_vector2
 
 def main():
