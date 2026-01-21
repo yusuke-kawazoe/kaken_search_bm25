@@ -1,0 +1,114 @@
+name: Keep Streamlit Alive
+
+on:
+  schedule:
+    # 日本時間 06:00 と 18:00
+    - cron: '0 9,21 * * *'
+  workflow_dispatch:
+
+jobs:
+  wake-up:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+
+      - name: Install dependencies
+        run: pip install selenium webdriver-manager
+
+      - name: Run Selenium Script
+        shell: python
+        run: |
+          from selenium import webdriver
+          from selenium.webdriver.chrome.options import Options
+          from selenium.webdriver.chrome.service import Service
+          from selenium.webdriver.common.by import By  # 追加: 要素検索用
+          from webdriver_manager.chrome import ChromeDriverManager
+          from time import sleep
+          import logging
+          import os
+
+          # ログ設定
+          logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+
+          def web_open(url):
+              driver = None
+              try:
+                  options = Options()
+                  options.add_argument('--headless=new') 
+                  options.add_argument('--no-sandbox')
+                  options.add_argument('--disable-dev-shm-usage')
+                  options.add_argument('--disable-gpu')
+                  options.add_argument("--window-size=1280,1024") # 画面サイズを確保
+                  
+                  # 偽装用User-Agent
+                  user_agent = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+                  options.add_argument(f'user-agent={user_agent}')
+
+                  service = Service(ChromeDriverManager().install())
+                  driver = webdriver.Chrome(service=service, options=options)
+                  driver.implicitly_wait(10)
+
+                  logging.info(f"Accessing... {url}")
+                  driver.get(url)
+                  
+                  # ページ読み込み待ち
+                  sleep(10)
+                  logging.info(f"Initial Page Title: {driver.title}")
+
+                  # ---------------------------------------------------------
+                  # 【重要】復帰ボタン ("Yes, get this app back up") を探して押す処理
+                  # ---------------------------------------------------------
+                  try:
+                      # ボタンのテキストに含まれるキーワードを探す
+                      buttons = driver.find_elements(By.XPATH, "//button[contains(., 'Yes, get this app back up')]")
+                      if buttons:
+                          logging.info("Wake up button found! Clicking it...")
+                          buttons[0].click()
+                          sleep(5) # クリック後の反応待ち
+                      else:
+                          logging.info("Wake up button not found (App might be already running).")
+                  except Exception as btn_err:
+                      logging.warning(f"Button click check failed: {btn_err}")
+
+                  # アプリが立ち上がるまでしっかり待機 (40秒)
+                  logging.info("Waiting for app to spin up...")
+                  sleep(40)
+
+                  # 最終確認用スクリーンショット撮影
+                  filename = f"screenshot_{url.split('//')[1].split('.')[0]}.png"
+                  driver.save_screenshot(filename)
+                  logging.info(f"Screenshot saved: {filename}")
+
+                  logging.info(f"Final Page Title: {driver.title}")
+
+              except Exception as e:
+                  logging.exception(f"Error occurred: {e}")
+                  # エラー時もスクショを撮る
+                  if driver:
+                      driver.save_screenshot("error_screenshot.png")
+                  raise e
+              finally:
+                  if driver:
+                      driver.quit()
+                      logging.info("Browser closed.")
+
+          def main():
+              url_list = [
+                  "https://yamaguchi-u-kakensearch.streamlit.app/"
+              ]
+              for url in url_list:
+                  web_open(url)
+
+          if __name__ == '__main__':
+              main()
+
+      # 【追加】撮影したスクリーンショットを保存して確認できるようにする
+      - name: Upload Screenshots
+        uses: actions/upload-artifact@v4
+        if: always() # エラーが起きても実行
+        with:
+          name: debug-screenshots
+          path: "*.png"

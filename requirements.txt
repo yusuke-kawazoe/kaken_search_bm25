@@ -1,0 +1,9 @@
+streamlit
+pandas
+scipy
+numpy
+scikit-learn
+duckdb
+requests
+
+
