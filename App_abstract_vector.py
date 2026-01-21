@@ -35,28 +35,26 @@ def main():
     @st.cache_resource(show_spinner="検索モデルをロード中...")
     def load_data():
         try:
-            # GitHubからバイナリを取得する関数 (fetch_binは既存のものを想定)
+            # fetch_bin の定義
             def fetch_bin(filename):
                 url = f"https://github.com/{OWNER}/{REPO}/releases/download/{TAG}/{filename}"
                 response = requests.get(url)
                 response.raise_for_status()
                 return io.BytesIO(response.content)
 
-            # 1. BM25モデルの読み込み
+            # ロード処理
             bm25_bin = fetch_bin(MODEL_FILE_NAME)
             bm25 = pickle.load(bm25_bin)
-            del bm25_bin
-            gc.collect()
-
-            # 2. メタデータの読み込み
+            
             meta_bin = fetch_bin(META_FILE_NAME)
             df = pd.read_parquet(meta_bin)
-            del meta_bin
-            gc.collect()
             
             return bm25, df
         except Exception as e:
-            st.error(f"データの読み込みに失敗しました: {e}")
+            # エラーの詳細を画面に出す
+            st.error(f"詳細エラー: {e}")
+            import traceback
+            st.code(traceback.format_exc()) # スタックトレースを表示
             return None, None
 
     bm25_model, df_meta = load_data()
