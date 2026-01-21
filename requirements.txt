@@ -1,10 +1,9 @@
 streamlit
 pandas
-scipy
 numpy
+scipy
 scikit-learn
 duckdb
 requests
 rank_bm25
-
-
+pyarrow
