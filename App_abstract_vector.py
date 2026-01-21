@@ -12,7 +12,7 @@ def main():
 
     # --- 設定 ---
     OWNER = "yusuke-kawazoe"
-    REPO = "kaken_search"
+    REPO = "kaken_search_bm25"
     TAG = "v1.0"
     MODEL_FILE_NAME = "bm25_model.pkl"
     META_FILE_NAME = "metadata.parquet"
