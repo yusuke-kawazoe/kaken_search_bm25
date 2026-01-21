@@ -14,7 +14,7 @@ def main():
     OWNER = "yusuke-kawazoe"
     REPO = "kaken_search"
     TAG = "v1.0"
-    MODEL_FILE_NAME = "bm25_model.pkl"  # ベクトルnpzから変更
+    MODEL_FILE_NAME = "bm25_model.pkl"
     META_FILE_NAME = "metadata.parquet"
 
     # セッション状態の初期化
@@ -25,28 +25,39 @@ def main():
         st.session_state.query_input = ""
         st.rerun()
 
+    # --- ヘルパー関数 (Tkinter版から移植) ---
+    def tokenize_ngram(text, n=2):
+        if not isinstance(text, str):
+            return []
+        # 文字単位のn-gram (デフォルトは2-gram)
+        return [text[i:i+n] for i in range(len(text)-n+1)]
+
     @st.cache_resource(show_spinner="検索モデルをロード中...")
     def load_data():
         try:
-            # ... (中略：GitHubからの取得処理) ...
+            # GitHubからバイナリを取得する関数 (fetch_binは既存のものを想定)
+            def fetch_bin(filename):
+                url = f"https://github.com/{OWNER}/{REPO}/releases/download/{TAG}/{filename}"
+                response = requests.get(url)
+                response.raise_for_status()
+                return io.BytesIO(response.content)
 
-            # 1. まずBM25モデルだけを読み込む
+            # 1. BM25モデルの読み込み
             bm25_bin = fetch_bin(MODEL_FILE_NAME)
             bm25 = pickle.load(bm25_bin)
-            del bm25_bin # すぐにバイナリを捨てる
+            del bm25_bin
             gc.collect()
 
-            # 2. 次にメタデータを読み込む
+            # 2. メタデータの読み込み
             meta_bin = fetch_bin(META_FILE_NAME)
             df = pd.read_parquet(meta_bin)
             del meta_bin
             gc.collect()
-
-            # 3. メタデータの軽量化（検索に不要な列をこの時点で捨てる）
-            # もし「概要」が巨大なら、一旦「概要」を落として「題名」等だけで検索し、
-            # 結果表示の時だけ「概要」をマージする方法もあります。
             
             return bm25, df
+        except Exception as e:
+            st.error(f"データの読み込みに失敗しました: {e}")
+            return None, None
 
     bm25_model, df_meta = load_data()
     if bm25_model is None:
@@ -71,59 +82,65 @@ def main():
             st.warning("テキストを入力してください。")
         else:
             with st.spinner("計算中..."):
-                # 1. クエリのトークナイズ (文字2-gram)
-                # モデル作成時と同じ方式にする必要があります
-                tokenized_query = [query_text[i:i+2] for i in range(len(query_text)-1)]
-                if not tokenized_query: # 1文字だけ入力された場合
+                # 1. クエリのトークナイズ (移植した2-gram方式)
+                tokenized_query = tokenize_ngram(query_text, n=2)
+                
+                # 1文字だけの場合のフォールバック
+                if not tokenized_query and len(query_text) > 0:
                     tokenized_query = [query_text]
 
-                # 2. スコア計算 (BM25)
-                # スコアは類似度(0~1)ではなく、関連度スコアとして算出されます
-                scores = bm25_model.get_scores(tokenized_query).astype(np.float32)
+                # 2. スコア計算
+                scores = bm25_model.get_scores(tokenized_query)
+
+                # 3. 高速な上位N件のインデックス取得 (移植したロジック)
+                n_docs = len(scores)
+                k = min(top_n, n_docs)
                 
-                # 3. スコアが0より大きいインデックスを取得
-                valid_idx = np.where(scores > 0)[0]
-                
-                if len(valid_idx) == 0:
+                # 有効なスコア（0より大きい）があるか確認
+                if np.max(scores) <= 0:
                     st.warning("キーワードに一致する課題が見つかりませんでした。")
                 else:
-                    # 4. 上位N件に絞り込み
-                    if len(valid_idx) > top_n:
-                        top_indices = valid_idx[np.argsort(-scores[valid_idx])[:top_n]]
+                    # np.argpartitionを使用して上位k件を効率的に抽出
+                    if n_docs > k * 5:
+                        top_indices = np.argpartition(-scores, k)[:k]
+                        sorted_top_indices = top_indices[np.argsort(-scores[top_indices])]
                     else:
-                        top_indices = valid_idx[np.argsort(-scores[valid_idx])]
-
-                    # 5. 結果の抽出
-                    res_df = df_meta.iloc[top_indices].copy()
-                    res_df.insert(0, "順位", range(1, len(res_df) + 1))
-                    res_df.insert(1, "スコア", scores[top_indices].tolist())
+                        sorted_top_indices = np.argsort(-scores)[::-1][:k]
                     
+                    # スコアが0以下のものは除外
+                    sorted_top_indices = [i for i in sorted_top_indices if scores[i] > 0]
+
+                    # 4. 結果の抽出と整形
+                    res_rows = []
+                    for rank, idx in enumerate(sorted_top_indices, 1):
+                        meta_row = df_meta.iloc[idx].to_dict()
+                        
+                        # カラム名の揺れを吸収 (Tkinter版のロジック)
+                        res_rows.append({
+                            "順位": rank,
+                            "スコア": float(f"{scores[idx]:.4f}"),
+                            "題名": meta_row.get("title") or meta_row.get("研究課題名") or "",
+                            "所属機関": meta_row.get("organization") or meta_row.get("所属機関") or "",
+                            "氏名": meta_row.get("name") or meta_row.get("研究者名") or "",
+                            "課題番号": meta_row.get("awardnumber") or meta_row.get("課題番号") or "",
+                            "種目": meta_row.get("section") or meta_row.get("種目") or "",
+                            "区分": meta_row.get("review_section") or meta_row.get("区分") or "",
+                            "概要": meta_row.get("abstract") or meta_row.get("概要") or ""
+                        })
+
+                    res_df = pd.DataFrame(res_rows)
+
                     # 不要なメモリ解放
-                    del scores, valid_idx, top_indices
+                    del scores, sorted_top_indices
                     gc.collect()
-
-                    # 6. 表示用にカラム名を整理
-                    rename_map = {
-                        "研究課題名": "題名", "title": "題名",
-                        "研究者名": "氏名", "name": "氏名",
-                        "課題番号": "課題番号", "awardnumber": "課題番号",
-                        "種目": "種目", "section": "種目",
-                        "区分": "区分", "review_section": "区分",
-                        "概要": "概要", "abstract": "概要"
-                    }
-                    res_df = res_df.rename(columns=rename_map)
-                    
-                    display_cols = ["順位", "スコア", "題名", "氏名", "課題番号", "種目", "区分", "概要"]
-                    existing_cols = [c for c in display_cols if c in res_df.columns]
-                    res_df = res_df[existing_cols]
 
                     st.success(f"{len(res_df)} 件表示しています。")
 
-                    # テーブル表示
+                    # 5. テーブル表示
                     st.dataframe(
                         res_df,
                         column_config={
-                            "スコア": st.column_config.NumberColumn(format="%.2f"),
+                            "スコア": st.column_config.NumberColumn(format="%.4f"),
                             "概要": st.column_config.TextColumn(width="large"),
                         },
                         use_container_width=True,
@@ -131,7 +148,7 @@ def main():
                         hide_index=True
                     )
 
-                    # CSVダウンロード
+                    # 6. CSVダウンロード
                     csv = res_df.to_csv(index=False).encode("utf-8-sig")
                     st.download_button("検索結果をCSVで保存", csv, "kaken_search_results.csv", "text/csv")
                     
